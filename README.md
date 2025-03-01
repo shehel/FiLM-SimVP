@@ -68,7 +68,7 @@ If you find this code useful, please cite our paper:
 
 ## License
 
-MIT
+GPL-3.0 license
 
 ## Acknowledgements
 
