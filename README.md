@@ -43,6 +43,9 @@ bash tools/dist_test.sh
 - `PinballLoss`: Implementation of the quantile loss function
 - `WeightedMISLoss`: Multiple Interval Score loss for interval predictions
 - `TaxibjDataset`: Dataset loader with quantile sampling
+- `main_utils.py`: Contains the proposed loss functions 
+- `train.py`: Train/validation loop
+- `base_method.py`: Validation pipeline (TODO needs cleanup)
 
 ## Datasets
 

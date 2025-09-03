@@ -42,8 +42,8 @@ if __name__ == '__main__':
             if config[attribute] is None:
                 config[attribute] = default_values[attribute]
 
-    results_csv_path = "./results/p2_e2_q1.csv"
-    task = Task.init(project_name='simvp/p2/e2/q5', task_name=config['ex_name'])
+    results_csv_path = "./results/p3_e1_q1.csv"
+    task = Task.init(project_name='simvp/p3/e1/q1', task_name=config['ex_name'])
     task_name = task.name
     task.connect_configuration(config)
     # set multi-process settings

@@ -23,8 +23,8 @@ class SimVP(Base_method):
         self.model = self._build_model(self.config)
         self.model_optim, self.scheduler, self.by_epoch = self._init_optimizer(steps_per_epoch)
         self.criterion = IntervalScores(quantile_weights=[1,1,1])
-        self.val_criterion = IntervalScores(quantile_weights=[1]*19)
-        self.loss_type = 'quantile'
+        self.val_criterion = IntervalScores(quantile_weights=[1]*3)
+        self.loss_type = 'mis'
     def _build_model(self, args):
 
         model = SimVPQFiLMC_Model(**args)

@@ -32,7 +32,8 @@ class TaxibjDataset(Dataset):
         #     # Filter out 0.05 and 0.20
         #     self.extra_quantiles = [q for q in candidates if q != 0.05 and q != 0.20]
 
-        self.quantiles = np.arange(0.05, 1, 0.05)
+        self.quantiles = np.arange(0.05, 1, 0.1)
+        #self.quantiles = np.array([0.05, 0.5, 0.95])
         #@self.extra_quantiles = [0.025, 0.075, 0.1  , 0.125, 0.15 , 0.175, 0.225, 0.25 , 0.275, 0.3  , 0.325, 0.35 , 0.375, 0.4  , 0.425, 0.45 , 0.475] #0.5  , 0.525, 0.55 , 0.575, 0.6  , 0.625, 0.65 , 0.675,
        #0.475] #0.5  , 0.525, 0.55 , 0.575, 0.6  , 0.625, 0.65 , 0.675,
        #0.7  , 0.725, 0.75 , 0.775, 0.8  , 0.825, 0.85 , 0.875, 0.9  ,
@@ -71,13 +72,14 @@ class TaxibjDataset(Dataset):
         if self.test:
             low_quantile = 0.05
             high_quantile = 0.95
-            quantiles = np.arange(0.05, 1, 0.05)
+            quantiles = np.arange(0.05, 1, 0.1)
+            #quantiles = np.array([0.05, 0.5, 0.95])
         else:
             #if self.extra_quantiles:
             #    random_choices = [0.05, 0.20] + self.extra_quantiles
             #else:
             #random_choices = [0.05, 0.20]
-            possible_values = np.arange(0.005, 0.5, 0.005)
+            possible_values = np.arange(0.05, 0.5, 0.1)
             low_quantile = random.choice(possible_values)
 
             #high_quantile = random.choice([0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95])
@@ -87,6 +89,7 @@ class TaxibjDataset(Dataset):
             m_quantile = 0.5
         #m_quantile = np.repeat(m_quantile, 4*32*32).reshape(4,1,32,32)
 
+            #quantiles = np.array([0.05, 0.5, 0.95])
             quantiles = np.array([low_quantile, m_quantile, high_quantile])
 
 

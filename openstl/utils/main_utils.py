@@ -134,7 +134,21 @@ def mis_loss_func(
     loss = torch.mean(loss)
 
     return loss
-
+def weighted_mis_loss_per_element(
+    y_pred: torch.Tensor, y_true: torch.Tensor, alpha: torch.Tensor, lambda_weight: float = 2.0
+) -> torch.Tensor:
+    # (Same logic as `weighted_mis_loss` above)
+    # ...
+    lower = y_pred[:, 0]
+    upper = y_pred[:, 1]
+    sharpness = upper - lower
+    penalty_lower = torch.relu(lower - y_true)
+    penalty_upper = torch.relu(y_true - upper)
+    penalty = (2.0 / alpha) * (penalty_lower + penalty_upper)
+    loss = sharpness + lambda_weight * penalty
+    
+    # CRITICAL CHANGE: Do NOT take the mean here. Return the full tensor.
+    return loss
 
 
 # As per definition in Dewolf paper
@@ -460,7 +474,7 @@ def reduce_tensor(tensor):
     return rt
 
 
-class WeightedMISLoss(nn.Module):
+class WeightedMISLoss_v0(nn.Module):
     def __init__(self, quantile_weights):
         super(WeightedMISLoss, self).__init__()
         self.quantile_weights = quantile_weights
@@ -496,4 +510,60 @@ class WeightedMISLoss(nn.Module):
         mae_loss = torch.mean(torch.abs(y_pred[:, middle_index, :, :, :] - y_true))
         individual_losses.append(mae_loss)
         total_loss = (total_loss + mae_loss) #/ (middle_index + 1)
+        return total_loss, individual_losses
+
+class WeightedMISLoss(nn.Module):
+    def __init__(self, quantile_weights, lambda_weight=1.0):
+        super(WeightedMISLoss, self).__init__()
+        self.quantile_weights = quantile_weights
+        self.lambda_weight = lambda_weight # Add lambda here
+
+    def forward(self, y_pred, y_true, mask, quantiles):
+        total_loss = 0
+        individual_losses = []
+
+        num_quantiles = y_pred.shape[1]
+        middle_index = num_quantiles // 2
+
+        for i in range(middle_index):
+            lower_idx = i
+            upper_idx = num_quantiles - 1 - i
+
+            lower = y_pred[:, lower_idx] # Assuming shape [batch, quantiles, ...]
+            upper = y_pred[:, upper_idx]
+
+            # Alpha can be a tensor if quantiles differ per sample
+            alpha = 1.0 - (quantiles[:, upper_idx] - quantiles[:, lower_idx])
+            # Reshape alpha to be broadcastable with the data tensors
+            while len(alpha.shape) < len(y_true.shape):
+                alpha = alpha.unsqueeze(-1)
+                
+            # Use the per-element loss function
+            loss_tensor = weighted_mis_loss_per_element(
+                torch.stack([lower, upper], dim=1), 
+                y_true, 
+                alpha, 
+                self.lambda_weight
+            )
+
+            # Apply mask and then take the mean
+            masked_loss = loss_tensor * mask
+            # We take sum and divide by mask's sum to correctly average non-masked elements
+            loss = torch.sum(masked_loss) / torch.sum(mask)
+
+            weight = (self.quantile_weights[lower_idx] + self.quantile_weights[upper_idx]) / 2
+            weighted_loss = weight * loss
+
+            individual_losses.append(weighted_loss)
+            total_loss += weighted_loss
+
+        # Handle MAE loss on the median prediction
+        median_pred = y_pred[:, middle_index]
+        mae_loss_tensor = torch.abs(median_pred - y_true)
+        masked_mae_loss = mae_loss_tensor * mask
+        mae_loss = torch.sum(masked_mae_loss) / torch.sum(mask)
+        
+        individual_losses.append(mae_loss)
+        total_loss = total_loss + mae_loss
+        
         return total_loss, individual_losses
