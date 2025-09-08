@@ -255,15 +255,26 @@ class Base_method(object):
         coverages = []
         mils = []
 
+        empirical_coverages_dict = {}
+        
         num_quantiles = len(data_loader.dataset.quantiles)
         for i in range(num_quantiles // 2):
             lo_idx = i
             hi_idx = num_quantiles - 1 - i
 
+            # Calculate the alpha for this interval
+            # We take the mean because quantiles is a batch of identical rows
+            alpha = 1.0 - (quantiles[0, hi_idx] - quantiles[0, lo_idx]).item()
+                        
             # TODO check trues.shape[1] is the appropriate time_step
             coverage, mil = eval_quantiles(preds[:, lo_idx], preds[:, hi_idx], trues, masks, time_step=trues.shape[1])
             coverages.append(coverage)
             mils.append(mil)
+
+            closest_target_alpha = min(self.target_alphas, key=lambda k: abs(k - alpha))
+            empirical_coverages_dict[closest_target_alpha] = coverage.item()
+            
+            
 
         results_all["pinball_loss"] = pinball_loss
         results_all["mis_loss"] = mis_loss
@@ -274,6 +285,7 @@ class Base_method(object):
         results_all["coverages"] = coverages
         results_all["mils"] = mils
         results_all["mse_total_variation"] = mse_total_variation
+        results_all["empirical_coverages"] = empirical_coverages_dict
 
         return results_all
 

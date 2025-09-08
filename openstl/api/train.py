@@ -367,8 +367,28 @@ class BaseExperiment(object):
                 cur_lr = self.method.current_lr()
                 cur_lr = sum(cur_lr) / len(cur_lr)
                 with torch.no_grad():
-                    vali_loss = self.vali(logger, epoch)
-
+                    vali_loss, empirical_coverages = self.vali(logger, epoch)
+                
+                # ------ CONTROLLER UPDATE STEP ------
+                if self.method.loss_type == 'mis':
+                    # Update the controller with the new coverage stats
+                    self.method.controller.update(empirical_coverages)
+                    
+                    # Get the new weights
+                    new_weights = self.method.controller.get_weights()
+                    
+                    # Apply them to the loss function for the next training epoch
+                    self.method.criterion.mis_loss_fn.update_weights(new_weights)
+                    
+                    # Log the new weights to monitor them
+                    for alpha, weight in new_weights.items():
+                        logger.report_scalar(
+                            title='Controller Weights',
+                            series=f'Weight_alpha_{alpha:.2f}',
+                            value=weight,
+                            iteration=epoch
+                        )
+                # -----------------------------------
                 if self._rank == 0:
 
                     print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
@@ -412,6 +432,7 @@ class BaseExperiment(object):
         """A validation loop during training"""
         self.call_hook('before_val_epoch')
         results = self.method.vali_one_epoch(self, self.vali_loader)
+        empirical_coverages = results.pop("empirical_coverages", {})
         for name, value in results.items():
             if name in ['inputs', 'trues', 'preds', 'masks']:
                 continue
@@ -514,9 +535,9 @@ class BaseExperiment(object):
                 nni.report_intermediate_result(eval_res['mse'].mean())
 
         if self.method.loss_type == 'mis':
-            return results['mis_loss']
+            return results['mis_loss'], empirical_coverages
         elif self.method.loss_type == 'quantile':
-            return results['pinball_loss']
+            return results['pinball_loss'], empirical_coverages
         else:
             raise ValueError("Invalid loss_type. Choose 'quantile' or 'mis'.")
 

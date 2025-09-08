@@ -134,20 +134,27 @@ def mis_loss_func(
     loss = torch.mean(loss)
 
     return loss
+
 def weighted_mis_loss_per_element(
-    y_pred: torch.Tensor, y_true: torch.Tensor, alpha: torch.Tensor, lambda_weight: float = 2.0
+    y_pred: torch.Tensor, y_true: torch.Tensor, alpha: torch.Tensor, coverage_weight: torch.Tensor
 ) -> torch.Tensor:
-    # (Same logic as `weighted_mis_loss` above)
-    # ...
+    """
+    Calculates the MIS loss for each element in the batch, weighted by a
+    dynamic coverage adjustment weight.
+    """
     lower = y_pred[:, 0]
     upper = y_pred[:, 1]
+    
     sharpness = upper - lower
+    
     penalty_lower = torch.relu(lower - y_true)
     penalty_upper = torch.relu(y_true - upper)
-    penalty = (2.0 / alpha) * (penalty_lower + penalty_upper)
-    loss = sharpness + lambda_weight * penalty
     
-    # CRITICAL CHANGE: Do NOT take the mean here. Return the full tensor.
+    # The penalty term is scaled by alpha. The entire penalty (coverage violation)
+    # is then scaled by the coverage_weight from the P-controller.
+    penalty = (2.0 / alpha) * (penalty_lower + penalty_upper)
+    
+    loss = sharpness + coverage_weight * penalty
     return loss
 
 
@@ -162,10 +169,10 @@ def eval_quantiles(lower, upper, trues,mask, time_step=1):
     return icp, mil
 
 class IntervalScores(nn.Module):
-    def __init__(self, quantile_weights):
+    def __init__(self, quantile_weights, initial_mis_weights: dict):
         super(IntervalScores, self).__init__()
         self.quantile_loss_fn = QuantileRegressionLoss(quantile_weights)
-        self.mis_loss_fn = WeightedMISLoss(quantile_weights)
+        self.mis_loss_fn = WeightedMISLoss(initial_mis_weights)
 
     def forward(self, pred, true, mask, quantiles, train_run=True, loss_type='quantile'):
         pred = pred * torch.unsqueeze(mask, 1)
@@ -513,70 +520,133 @@ class WeightedMISLoss_v0(nn.Module):
         return total_loss, individual_losses
 
 class WeightedMISLoss(nn.Module):
-    def __init__(self, quantile_weights, lambda_weight=1.1):
+    def __init__(self, initial_weights: dict):
         super(WeightedMISLoss, self).__init__()
-        self.quantile_weights = quantile_weights
-        self.lambda_weight = lambda_weight # Add lambda here
-        #self.mapping = {0.9: 1.15, 0.7: 1.15, 0.5: 1.2, 0.3: 1.3, 0.1: 1.6}
-        self.mapping = {0.9: 1, 0.7: 1, 0.5: 1, 0.3: 1, 0.1: 1}
+        # This dictionary will be updated by the controller
+        self.interval_weights = initial_weights
+
+    def update_weights(self, new_weights: dict):
+        """Method to update the weights from the controller."""
+        self.interval_weights = new_weights
 
     def forward(self, y_pred, y_true, mask, quantiles):
         total_loss = 0
         individual_losses = []
 
-        num_quantiles = len(self.quantile_weights)
+        num_quantiles = y_pred.shape[1]
         middle_index = num_quantiles // 2
 
         for i in range(middle_index):
             lower_idx = i
             upper_idx = num_quantiles - 1 - i
 
-            lower = y_pred[:, lower_idx] # Assuming shape [batch, quantiles, ...]
+            lower = y_pred[:, lower_idx]
             upper = y_pred[:, upper_idx]
 
-            # Alpha can be a tensor if quantiles differ per sample
+            # Alpha can be a tensor if quantiles differ per sample in a batch
             alpha = 1.0 - (quantiles[:, upper_idx] - quantiles[:, lower_idx])
-            # Reshape alpha to be broadcastable with the data tensors
             while len(alpha.shape) < len(y_true.shape):
                 alpha = alpha.unsqueeze(-1)
-                
-            mapped_alpha = torch.clone(alpha)
-            for old_value, new_value in self.mapping.items():
-                # Use torch.isclose for robust floating-point comparison.
-                # This creates a boolean mask where alpha is close to the old_value.
-                key_tensor = torch.tensor(old_value, device=alpha.device, dtype=alpha.dtype)
-                close_mask = torch.isclose(alpha, key_tensor)
-                
-                # Use the mask to update the values in the mapped_alpha tensor.
-                mapped_alpha[close_mask] = new_value
+            
+            # Create a tensor to hold the corresponding coverage weight for each item in the batch
+            coverage_weights_tensor = torch.ones_like(alpha)
+            # Find the closest alpha in our controller's keys and assign its weight
+            for item_idx, a_val in enumerate(alpha.flatten()):
+                # Find the key in interval_weights that is closest to a_val
+                closest_alpha_key = min(self.interval_weights.keys(), key=lambda k: abs(k - a_val.item()))
+                coverage_weights_tensor.flatten()[item_idx] = self.interval_weights[closest_alpha_key]
 
-            # Iterate over the mapping and update the new tensor.
             # Use the per-element loss function
             loss_tensor = weighted_mis_loss_per_element(
-                torch.stack([lower, upper], dim=1), 
-                y_true, 
-                alpha, 
-                mapped_alpha
+                torch.stack([lower, upper], dim=1),
+                y_true,
+                alpha,
+                coverage_weights_tensor # Pass the dynamic weights here
             )
 
             # Apply mask and then take the mean
             masked_loss = loss_tensor * mask
-            # We take sum and divide by mask's sum to correctly average non-masked elements
-            loss = torch.sum(masked_loss) / torch.sum(mask)
+            loss = torch.sum(masked_loss) / (torch.sum(mask) + 1e-8) # Add epsilon for safety
 
-            weight = (self.quantile_weights[lower_idx] + self.quantile_weights[upper_idx]) / 2
-            weighted_loss = weight * loss
-
-            individual_losses.append(weighted_loss)
-            total_loss += weighted_loss
+            # The original quantile_weights can be removed or kept if you want another layer of static weighting
+            # For this implementation, we assume they are all 1.
+            # weight = (self.quantile_weights[lower_idx] + self.quantile_weights[upper_idx]) / 2
+            # weighted_loss = weight * loss
+            
+            individual_losses.append(loss)
+            total_loss += loss
 
         # Handle MAE loss on the median prediction
         median_pred = y_pred[:, middle_index]
         mae_loss_tensor = torch.abs(median_pred - y_true)
         masked_mae_loss = mae_loss_tensor * mask
-        mae_loss = torch.sum(masked_mae_loss) / torch.sum(mask)
+        mae_loss = torch.sum(masked_mae_loss) / (torch.sum(mask) + 1e-8)
         
         individual_losses.append(mae_loss)
         total_loss = total_loss + mae_loss
         
         return total_loss, individual_losses
+    
+    
+class CoverageController:
+    """
+    A Proportional (P) Controller with momentum to dynamically adjust loss weights
+    based on the error between target and empirical coverage.
+
+    Args:
+        target_alphas (list[float]): A list of alpha values for the intervals
+                                     (e.g., 0.1 for a 90% interval).
+        kp (float): The proportional gain (learning rate) for the controller.
+        momentum (float): The momentum factor (beta) for smoothing updates.
+    """
+    def __init__(self, target_alphas, kp=0.1, momentum=0.9):
+        if not (0 < momentum < 1):
+            raise ValueError("Momentum must be between 0 and 1.")
+        self.target_alphas = sorted(target_alphas)
+        self.kp = kp
+        self.momentum = momentum
+
+        # Initialize weights to 1.0 (no initial adjustment)
+        self.weights = {alpha: 1.0 for alpha in self.target_alphas}
+        # Initialize momentum term (velocities) to 0.0
+        self.velocities = {alpha: 0.0 for alpha in self.target_alphas}
+
+    def update(self, empirical_coverages: dict):
+        """
+        Update the weights based on the latest empirical coverage values.
+
+        Args:
+            empirical_coverages (dict): A dictionary mapping alpha values to
+                                        their measured empirical coverage on the
+                                        validation set.
+        """
+        for alpha in self.target_alphas:
+            if alpha not in empirical_coverages:
+                print(f"Warning: Alpha {alpha} not found in empirical coverages. Skipping update for this interval.")
+                continue
+
+            target_coverage = 1.0 - alpha
+            empirical_coverage = empirical_coverages[alpha]
+            
+            # 1. Calculate the error
+            error = target_coverage - empirical_coverage
+
+            # 2. Update velocity with momentum
+            # v_t = beta * v_{t-1} + (1 - beta) * error
+            self.velocities[alpha] = (self.momentum * self.velocities[alpha]) + \
+                                     ((1 - self.momentum) * error)
+            
+            # 3. Update the weight
+            # w_t = w_{t-1} + Kp * v_t
+            # We add the update, so a positive error (undercoverage) increases the weight.
+            new_weight = self.weights[alpha] + self.kp * self.velocities[alpha]
+
+            # 4. Clip the weight to prevent it from becoming negative or zero
+            self.weights[alpha] = max(0.1, new_weight)
+        
+        print ("Updated weights:")
+        print (self.weights)
+
+    def get_weights(self):
+        """Returns the current dictionary of weights."""
+        return self.weights

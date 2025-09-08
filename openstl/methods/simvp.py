@@ -6,7 +6,7 @@ from tqdm import tqdm
 from timm.utils import AverageMeter
 
 from openstl.models import SimVP_Model, SimVPQ_Model, SimVPQCond_Model, SimVPQFiLM_Model, SimVPQFiLMC_Model, SimVPQCondC_Model
-from openstl.utils import reduce_tensor, IntervalScores
+from openstl.utils import reduce_tensor, IntervalScores, CoverageController
 from .base_method import Base_method
 
 import pdb
@@ -22,9 +22,24 @@ class SimVP(Base_method):
         Base_method.__init__(self, args, device, steps_per_epoch)
         self.model = self._build_model(self.config)
         self.model_optim, self.scheduler, self.by_epoch = self._init_optimizer(steps_per_epoch)
-        self.criterion = IntervalScores(quantile_weights=[1,1,1])
-        self.val_criterion = IntervalScores(quantile_weights=[1]*3)
+
+        # Define the target alphas for your intervals
+        # E.g., for quantiles [0.05, 0.15, 0.25, 0.5, 0.75, 0.85, 0.95]
+        # The intervals are 90% (0.95-0.05), 70% (0.85-0.15), 50% (0.75-0.25)
+        # So the alphas are 0.1, 0.3, 0.5
+        # MAKE SURE THESE MATCH YOUR VALIDATION INTERVALS
+        self.target_alphas = [0.1, 0.3, 0.5, 0.7, 0.9] # Example, adjust as needed
+        self.controller = CoverageController(target_alphas=self.target_alphas, kp=0.05, momentum=0.9)
+        
+        # Get initial weights from the controller
+        initial_mis_weights = self.controller.get_weights()
+        
+        
+        self.criterion = IntervalScores(quantile_weights=[1,1,1], initial_mis_weights=initial_mis_weights)
+        self.val_criterion = IntervalScores(quantile_weights=[1]*3, initial_mis_weights=initial_mis_weights)
         self.loss_type = 'mis'
+        
+        
     def _build_model(self, args):
 
         model = SimVPQFiLMC_Model(**args)
@@ -130,6 +145,7 @@ class SimVP(Base_method):
                 log_buffer += ' | data time: {:.4f}'.format(data_time_m.avg)
                 train_pbar.set_description(log_buffer)
             end = time.time()  # end for
+
 
         if hasattr(self.model_optim, 'sync_lookahead'):
             self.model_optim.sync_lookahead()
