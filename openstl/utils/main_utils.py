@@ -599,7 +599,7 @@ class CoverageController:
         kp (float): The proportional gain (learning rate) for the controller.
         momentum (float): The momentum factor (beta) for smoothing updates.
     """
-    def __init__(self, target_alphas, kp=0.1, momentum=0.9):
+    def __init__(self, target_alphas, kp=1, momentum=0.9):
         if not (0 < momentum < 1):
             raise ValueError("Momentum must be between 0 and 1.")
         self.target_alphas = sorted(target_alphas)

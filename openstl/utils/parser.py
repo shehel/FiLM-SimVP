@@ -79,6 +79,8 @@ def create_parser():
                         help='Whether to allow overwriting the provided config file with args')
 
     # Training parameters (optimizer)
+    parser.add_argument('--early_stop_mil_weight', type=float, default=0.5,
+                    help='Weight for the Mean Interval Length in the early stopping score.')
     parser.add_argument('--epoch', '-e', default=100, type=int, help='end epochs')
     parser.add_argument('--log_step', default=1, type=int, help='Log interval by step')
     parser.add_argument('--opt', default='adam', type=str, metavar='OPTIMIZER',

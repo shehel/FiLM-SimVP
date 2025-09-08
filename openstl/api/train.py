@@ -367,7 +367,7 @@ class BaseExperiment(object):
                 cur_lr = self.method.current_lr()
                 cur_lr = sum(cur_lr) / len(cur_lr)
                 with torch.no_grad():
-                    vali_loss, empirical_coverages = self.vali(logger, epoch)
+                    early_stop_score, empirical_coverages = self.vali(logger, epoch)
                 
                 # ------ CONTROLLER UPDATE STEP ------
                 if self.method.loss_type == 'mis':
@@ -392,7 +392,7 @@ class BaseExperiment(object):
                 if self._rank == 0:
 
                     print_log('Epoch: {0}, Steps: {1} | Lr: {2:.7f} | Train Loss: {3:.7f} | Vali Loss: {4:.7f}\n'.format(
-                        epoch + 1, len(self.train_loader), cur_lr, loss_total.avg, vali_loss))
+                        epoch + 1, len(self.train_loader), cur_lr, loss_total.avg, early_stop_score))
                     logger.report_scalar(title='Training Report', 
                         series='Train Loss', value=loss_total.avg, iteration=epoch)
                     # logger.report_scalar(title='Training Report',
@@ -407,7 +407,7 @@ class BaseExperiment(object):
                     #     series='Train Coverage', value=coverage.avg, iteration=epoch)
                     # logger.report_scalar(title='Training Report',
                     #     series='Train MIL', value=mil.avg, iteration=epoch)
-                    early_stop_decision =recorder(vali_loss, self.method.model, self.path, epoch, early_stop)
+                    early_stop_decision =recorder(early_stop_score, self.method.model, self.path, epoch, early_stop)
                     self._save(name='latest')
             if self._use_gpu and self.args.empty_cache:
                 torch.cuda.empty_cache()
@@ -433,6 +433,40 @@ class BaseExperiment(object):
         self.call_hook('before_val_epoch')
         results = self.method.vali_one_epoch(self, self.vali_loader)
         empirical_coverages = results.pop("empirical_coverages", {})
+        
+        # ------ NEW: Calculate the Composite Early Stopping Score ------
+    
+        # C is a hyperparameter to balance coverage error and interval width.
+        # You should add this to your args/config. A value between 0.1 and 1.0 is a good start.
+        C_mil_weight = getattr(self.args, 'early_stop_mil_weight', 0.5)
+
+        total_coverage_error = 0.0
+        target_alphas = self.method.target_alphas
+        
+        if target_alphas and empirical_coverages:
+            for alpha in target_alphas:
+                target_coverage = 1.0 - alpha
+                empirical_coverage = empirical_coverages.get(alpha, target_coverage) # Default to 0 error if not found
+                total_coverage_error += abs(target_coverage - empirical_coverage)
+            
+            avg_coverage_error = total_coverage_error / len(target_alphas)
+        else:
+            avg_coverage_error = 0.0 # Should not happen in MIS mode
+
+        # results['mils'] is a list of tensors, convert them to floats and average
+        avg_mil = np.mean([m.item() for m in results['mils']]) if results['mils'] else 0.0
+
+        # The final score to be minimized
+        early_stop_score = avg_coverage_error + C_mil_weight * avg_mil
+
+        # Log the components for better monitoring
+        logger.report_scalar(title='Validation Metrics', series='EarlyStopScore', value=early_stop_score, iteration=epoch)
+        logger.report_scalar(title='Validation Metrics', series='AvgCoverageError', value=avg_coverage_error, iteration=epoch)
+        logger.report_scalar(title='Validation Metrics', series='AvgMIL', value=avg_mil, iteration=epoch)
+        logger.report_scalar(title='Validation Metrics', series='MIS_Loss', value=results['mis_loss'].item(), iteration=epoch)
+
+        # ------ End of New Score Calculation ------
+        
         for name, value in results.items():
             if name in ['inputs', 'trues', 'preds', 'masks']:
                 continue
