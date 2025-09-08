@@ -513,16 +513,18 @@ class WeightedMISLoss_v0(nn.Module):
         return total_loss, individual_losses
 
 class WeightedMISLoss(nn.Module):
-    def __init__(self, quantile_weights, lambda_weight=1.0):
+    def __init__(self, quantile_weights, lambda_weight=1.1):
         super(WeightedMISLoss, self).__init__()
         self.quantile_weights = quantile_weights
         self.lambda_weight = lambda_weight # Add lambda here
+        #self.mapping = {0.9: 1.15, 0.7: 1.15, 0.5: 1.2, 0.3: 1.3, 0.1: 1.6}
+        self.mapping = {0.9: 1, 0.7: 1, 0.5: 1, 0.3: 1, 0.1: 1}
 
     def forward(self, y_pred, y_true, mask, quantiles):
         total_loss = 0
         individual_losses = []
 
-        num_quantiles = y_pred.shape[1]
+        num_quantiles = len(self.quantile_weights)
         middle_index = num_quantiles // 2
 
         for i in range(middle_index):
@@ -538,12 +540,23 @@ class WeightedMISLoss(nn.Module):
             while len(alpha.shape) < len(y_true.shape):
                 alpha = alpha.unsqueeze(-1)
                 
+            mapped_alpha = torch.clone(alpha)
+            for old_value, new_value in self.mapping.items():
+                # Use torch.isclose for robust floating-point comparison.
+                # This creates a boolean mask where alpha is close to the old_value.
+                key_tensor = torch.tensor(old_value, device=alpha.device, dtype=alpha.dtype)
+                close_mask = torch.isclose(alpha, key_tensor)
+                
+                # Use the mask to update the values in the mapped_alpha tensor.
+                mapped_alpha[close_mask] = new_value
+
+            # Iterate over the mapping and update the new tensor.
             # Use the per-element loss function
             loss_tensor = weighted_mis_loss_per_element(
                 torch.stack([lower, upper], dim=1), 
                 y_true, 
                 alpha, 
-                self.lambda_weight
+                mapped_alpha
             )
 
             # Apply mask and then take the mean

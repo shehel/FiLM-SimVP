@@ -403,8 +403,8 @@ class BaseExperiment(object):
         best_model_path = osp.join(self.path, 'checkpoint.pth')
         latest_model_path = osp.join(self.path, 'checkpoints/latest.pth')
         self._load_from_state_dict(torch.load(best_model_path))
-        self.task.upload_artifact(artifact_object=best_model_path, name='best_model_weights')
-        self.task.upload_artifact(artifact_object=latest_model_path, name='latest_model_weights')
+        #self.task.upload_artifact(artifact_object=best_model_path, name='best_model_weights')
+        #self.task.upload_artifact(artifact_object=latest_model_path, name='latest_model_weights')
         time.sleep(1)  # wait for some hooks like loggers to finish
         self.call_hook('after_run')
 
