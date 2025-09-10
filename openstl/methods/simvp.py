@@ -29,7 +29,7 @@ class SimVP(Base_method):
         # So the alphas are 0.1, 0.3, 0.5
         # MAKE SURE THESE MATCH YOUR VALIDATION INTERVALS
         self.target_alphas = [0.1, 0.3, 0.5, 0.7, 0.9] # Example, adjust as needed
-        self.controller = CoverageController(target_alphas=self.target_alphas, kp=0.05, momentum=0.9)
+        self.controller = CoverageController(target_alphas=self.target_alphas, kp=0.5, momentum=0.5)
         
         # Get initial weights from the controller
         initial_mis_weights = self.controller.get_weights()

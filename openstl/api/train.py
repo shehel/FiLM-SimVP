@@ -569,7 +569,7 @@ class BaseExperiment(object):
                 nni.report_intermediate_result(eval_res['mse'].mean())
 
         if self.method.loss_type == 'mis':
-            return results['mis_loss'], empirical_coverages
+            return early_stop_score, empirical_coverages
         elif self.method.loss_type == 'quantile':
             return results['pinball_loss'], empirical_coverages
         else:
